@@ -1,53 +1,28 @@
-#define API_VERSION "0.03"
+#define API_VERSION "0.04"
 /**
 
- @brief Acc-Mag-Sensor API version 0.03 2/16/2021 last edited by PJS
+ @brief Acc-Mag-Sensor API version 0.04 2/19/2021 last edited by PJS
 
-   THIS NAME SEEMS TOO SPECIFIC. SHOULD IT BE "See-Insights-Sensor"? 
+ ==== Notes about the changes from 0.03 to 0.04
+ This reflects our phone conversation. The earlier notion of fine grain 
+ sensitivity is morphed into a new setRange() function. Function getAxisData()
+ is added to return a struct of six int16_t values containing the current
+ measurements. We also realized a new  basic requirement for a polled mode in
+ addition to the currently defind interrupt-driven type of operation. Polled
+ mode is necessary to deal with the availability of pins to dedicate to
+ interrupt connections. The convention will be that if an event callback
+ argument to the configuration class constructor is NULL polling mode will be
+ implemented. With polling new bool functions getAccEvent() and getMagEvent() 
+ will be in the API, returning true if an event has been detected, with the 
+ function call clearing the event state. The return value when not in polling
+ mode will always be false.
 
- and please ignore indentation foul ups for now :-)
-
- ==== Notes about the changes from 0.02 to 0.03
- CHIP: This reflects our phone conversation to the best of my knowledge. I
- have to ask you to read this top to bottom again. Hopefully with the next
- update a "diff" will be more useful.
-
- One type of change will be from realizing better what needs to be hidden in 
- the API's implementation and what sort of interfaces need to be exposed in 
- the public part of the API. In particular, details like interrupt polarity 
- would be in the former category, while the course 1-10 and finer grain 1-100 
- sensitivity setting as well as the means for "not properly oriented" 
- indication need to be accessible to the Particle apps using the API with
- a pragmatic design. You also need as much explanation as possible for what
- the sensitivity numbers translate to with the sensor, such as milligravities
- that you an relate to IC datasheet details. I believe we also agreed that the 
- details of pin usage can be automagically handled by the API implementation
- but at the same time the details should be here so the user of the API 
- doesn't accidentally oversubscribe a pin. For our currently anticipated 
- hardware I think we agreed that the default "SS" pin for each of the flavors
- of Particle board will be used for chip select, so I should be able to
- define all of this without any ambiguity EXCEPT for the interrupt lines.
- There are one to three of these, depending on the IC involved, but typically
- only two will be used. These will have to be listed with agreed to values
- along with the "standard" pins for the communications bus interface (e.g.
- SPI).
-
- We can't really afford to expose ANY hardware configuration specifics beyond
- those inherent to accelerometers and magnetometers via the public API without 
- getting into two kinds of trouble:
-  1) We switch to some new system that requires, for example, a new flavor
-     of interrupt type that doesn't fit into push-pull+active high, etc.
-  2) We want the compilation of the API implementation to detect and set
-     hardware specifics via build configuration variables. So specifying
-     details in two places is trouble.
-
- The usage.ino is split out into an examples subdirectory (if you don't mind
- I'm going to use "directory" instead of "folders", know you know the
- equivalence). If I've got the dir or filenames a bit messed up be patient
- with me. I'll get it sorted after I've been able to restructure the repo.
- I realized that while we have active branches in addition to main I need
- to sanity check the restructuring plan with you before pulling the trigger.
- Details about that can come a little later.
+ But specific pin assignments will still be defined by platform-specific,
+ compile-time assignments in the implemention using a helper header file or a
+ library. We should probably call this something like siHAL for See Insights 
+ Hardware Abstraction L{ayer,ibrary}. This would anticipate additional
+ systems needing the HAL vs tainting this API's library with details that
+ should be more general.
 
  ===== The API design notes and declarations
 
@@ -60,21 +35,23 @@
  additional requirements.
 
  When an acceleration event is detected a user defined callback function is 
- invoked (called), and a second user defined callback function is invoked each 
- time a magnetic field event is detected. The details of what constitutes an
- event for each sensor are defined by policies and any specific configuration
- settings made prior to instantiating the control object for the sensor. 
+ invoked (called), or, if none is defined, internal state is changed and that
+ state can be fetched with a getter function. A second user defined callback 
+ function is invoked each time a magnetic field event is detected, or else
+ corresponding state is available when using polling. The details of what 
+ constitutes an event for each sensor are defined by policies and any specific 
+ configuration settings made prior to instantiating the control object for the 
+ sensor. There are two configuration-related setter functions per sensor
+ type: one each for setting the sensor range and the sensor sensitivity.
+
  Configuration details are contained in a separate configuration object that
  is passed as a parameter to the control object class construtor. Once the
  control object is instantiated the available API functions will be to do
  with gathering details of operation in addition to having the two callback
  actions: no dynamic adjustment of policy or configuration parameters or
- other "knobs" are available once the control object is created. The
- function calls for providing information, for example current axis threshold
- values, "history" of past events or other state information are TBD. 
-
-(CHIP: I'm expecting you to make a list of these "monitor" function calls
-  for the next update). 
+ other "knobs" are available once the control object is created. There will
+ be a getter function for retrieving the current values for all six sensor
+ axes. 
 
  With the recent change to have all sensor handling remote from the sensor
  everything to do with the sensor becomes configurable by over the air
@@ -86,25 +63,9 @@
  The default policy for the library will define triggering of exceeding 
  thresholds of z axis values for either sensor. 
 
- One "sensitivity knob" function for each sensor will be available via the 
- config object for control of the sensor response to accelerations and changes
- in magnetic field strength respectively. Sensitivity can be set to an ordinal
- value from zero to nine.
-
- At least one getter function for each sensor type will be available to 
- translate a source sensitivity setting into sensor-specific details such as
- microgravity threshold, microtesla threshold, etc. There may be additional
- getters to express the sensitivity such as with additional axis values being
- involved. These getters may be tightly coupled to policy names. That is,
- the initial getter call to "tell me the Z axis mg corresponding to sensitivity
- setting five" be to getDefaultSensitvity(5), while for another policy foo it
- will have to be getFooSensitivity(5). The rationale for this is discussed
- below to do with maintaining backward compatibility.
-
  If the single axis policy is inadequate new policies can be defined
- in terms of either different axis thresholds, or possibly using multiple
- interrupt handling states, combinations of multiple axis value detection
- sequences. 
+ in terms of, for example, different axis thresholds, multiple interrupt 
+ handling states, combinations of multiple axis value detection sequences, etc.
 
  The expectation is that the design/test/enhance flow steps will
  proceed something like this:
@@ -136,10 +97,9 @@
 
  Regression tests should detect violations of the big rule.
 
- HOWEVER, it may be deemed necessary to declare the initial API and its
- implementation with an "initial" default policy as "so broken it's not even
- wrong", in which case by agreement a new default policy is define and that
- starts the "clock" and the no violation of backward compatibility rule.
+ HOWEVER, the "freeze" of a policy definition is only completed when the API
+ implementation has been promoted to production status (commited to the
+ production workspace in the repository).
   
  The AccMagSensorConfig class defines a configuration object with an initial
  state depending on its class constructor parameters and any setter functions
@@ -165,15 +125,22 @@
 
 enum AMSStatusEnum {
   AMS_OK,                           	// Normal completion
+  AMS_CONFIG_NOT_VALID_AFTER_BEGIN,	// Can't call config after sys start
   AMS_NOT_IMPLEMENTED,			// Not (yet) implemented
   AMS_ILLEGAL_SENSITIVITY,		// Illegal sensitivity value
-  AMS_ILLEGAL_THRESHOLD,		// Illegal threshold value
+  AMS_ILLEGAL_RANGE,		        // Illegal range value
   AMS_IMPROPER_ORIENTATION,		// System failure: not placed properly
   AMS_NOT_RUNNING,			// Cannot end() stopped system
   AMS_RUNNING,				// Cannot begin running system
   AMS_WHOAMI_FAILURE}; 			// System failure: sensor not found
 
 typedef enum AMSStatusEnum AMSStatus;
+
+struct AMSData_struct {
+  int16_t a_x, a_y, a_z, m_x, m_y, m_z;
+};
+
+typedef struct AMSData_struct AMSData;
 
 /*
  * The API class declarations
@@ -197,8 +164,8 @@ class AccMagSensorConfig {
      *
      * @detail Invalid parameters will result in a false return from AccMagSensor.begin (how to make doxygen link here?)
      * 
-     * @param accEvent - func called with acceleration event (no default)
-     * @param magEvent - func called with magnetic field event (no default)
+     * @param accEvent - func called with acceleration event or NULL
+     * @param magEvent - func called with magnetic field event or NULL
      * @param policy - the enumeration value of the desired sensor system behavior policy
      * @param logical_device - an ordinal specifying a single device (placeholder)
      */
@@ -209,49 +176,40 @@ class AccMagSensorConfig {
                 uint32_t logical_device = 0);
 
     /**
-     * @brief A configuration function to specify the desired sensor sensitivity
+     * @brief Override the default accelerometer sensor sensitivity
      * 
-     * @param interrupt_type - the desired interrupt output type
+     * @param sensitivity_value - the desired sensitivity from 0-9
      * @return The OK or exception status value
      */
 
-    AMSStatus setSensitivity(uint32_t sensitivity_value);
+    AMSStatus setAccSensitivity(uint32_t sensitivity_value);
 
     /**
-     * @brief set the specific Z axis accel threshold for "minimum sensitivity"
+     * @brief Override the default magnetometer sensor sensitivity
      * 
-     * @param threshold - the positive or negative axis threhold value
+     * @param sensitivity_value - the desired sensitivity from 0-9
      * @return The OK or exception status value
      */
 
-    AMSStatus setAzMinThreshold(int16_t threshold);
+    AMSStatus setMagSensitivity(uint32_t sensitivity_value);
 
     /**
-     * @brief set the specific Z axis accel threshold for "maximum sensitivity"
+     * @brief override the default accelerometer sensor range
      * 
-     * @param threshold - the positive or negative axis threhold value
+     * @param range_value - the sensor range value
      * @return The OK or exception status value
      */
 
-    AMSStatus setAzMaxThreshold(int16_t threshold);
+    AMSStatus setAccRange(int16_t range_value);
 
     /**
-     * @brief set the specific Z axis mag threshold for "minimum sensitivity"
+     * @brief override the default magnetometer sensor range
      * 
-     * @param threshold - the positive or negative axis threhold value
+     * @param range_value - the sensor range value
      * @return The OK or exception status value
      */
 
-    AMSStatus setMzMinThreshold(int16_t threshold);
-
-    /**
-     * @brief set the specific Z axis mag threshold for "maximum sensitivity"
-     * 
-     * @param threshold - the positive or negative axis threhold value
-     * @return The OK or exception status value
-     */
-
-    AMSStatus setMzMaxThreshold(int16_t threshold);
+    AMSStatus setMagRange(int16_t range_value);
 
   /**
    * @brief the config API version
@@ -327,7 +285,6 @@ class AccMagSensor {
 
    AMS_Status getOrientation();
 
-
   /**
    * @brief return the most recent sensor system status
    * @detail last_status is updated by the system asynchronously
@@ -335,6 +292,29 @@ class AccMagSensor {
    */
 
   AMSStatus getStatus() { return last_status; }
+
+  /**
+   * @brief get the current acceleration event state
+   * @detail always returns false if not in polling mode
+   * @return true if an event is present, false otherwise
+   */
+
+  bool getAccEvent();
+
+  /**
+   * @brief get the current magnetometer event state
+   * @detail always returns false if not in polling mode
+   * @return true if an event is present, false otherwise
+   */
+
+  bool getMagEvent();
+
+  /**
+   * @brief fill the fields of the structure parameter with current axis values
+   * @param axis_data
+   */
+
+  AMSStatus getAxisData(AMSData &axis_data);
 
   /**
    * @brief the control API version
